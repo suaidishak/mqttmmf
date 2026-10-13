@@ -14,11 +14,13 @@ import threading
 import time
 import uuid
 from urllib.parse import quote
+from averages import average_snapshot
+from supabase_writer import write_averages
 
 STATIONS = tuple(f"MMF{i}" for i in range(1, 5))
 INTERVAL = 900
 MAX_PAYLOAD = 65536
-MAX_TOPICS = 256
+MAX_TOPICS = 4096
 LOG = logging.getLogger("mmf")
 
 
@@ -39,6 +41,9 @@ def environment_config():
     tls = os.environ.get("MQTT_TLS", "false").lower()
     if tls not in ("true", "false"):
         raise ValueError("Invalid TLS setting")
+    supabase_enabled = os.environ.get("MMF_SUPABASE_ENABLED", "false").lower()
+    if supabase_enabled not in ("true", "false"):
+        raise ValueError("Invalid Supabase setting")
     return validate_config({
         "host": os.environ.get("MQTT_HOST", ""),
         "port": int(os.environ.get("MQTT_PORT", "1883")),
@@ -47,6 +52,8 @@ def environment_config():
         "topicRoot": os.environ.get("MQTT_TOPIC_ROOT", "BDNS"),
         "pythonAnywhereUsername": os.environ.get("PYTHONANYWHERE_USERNAME", ""),
         "remoteFile": os.environ.get("PYTHONANYWHERE_REMOTE_FILE", ""),
+        "stations": os.environ.get("MQTT_STATIONS", ",".join(STATIONS)).split(","),
+        "supabaseEnabled": supabase_enabled == "true",
     })
 
 
@@ -70,13 +77,19 @@ def validate_config(config):
     for key in ("MQTT_USERNAME", "MQTT_PASSWORD", "PYTHONANYWHERE_API_TOKEN"):
         if not os.environ.get(key):
             raise ValueError("Missing runtime secret")
+    stations = config.get("stations", list(STATIONS))
+    import re
+    if not isinstance(stations, list) or not 1 <= len(stations) <= 64 or any(not isinstance(s, str) or not re.fullmatch(r"MMF[1-9][0-9]{0,3}", s) for s in stations) or len(set(stations)) != len(stations):
+        raise ValueError("Invalid station list")
+    config["stations"] = stations
     return config
 
 
 class Readings:
-    def __init__(self, root, site_code):
+    def __init__(self, root, site_code, stations=STATIONS):
         self.root = root
         self.site_code = site_code
+        self.stations = tuple(stations)
         self.lock = threading.Lock()
         self.messages = {}
         self.connected = False
@@ -88,7 +101,7 @@ class Readings:
     def accept(self, topic, payload, retained=False, received_at=None):
         relative = topic.removeprefix(self.root + "/")
         station = relative.split("/", 1)[0]
-        if not topic.startswith(self.root + "/") or station not in (*STATIONS, "MMF"):
+        if not topic.startswith(self.root + "/") or station not in (*self.stations, "MMF"):
             return False
         if station == "MMF" and relative != "MMF":
             return False
@@ -100,7 +113,7 @@ class Readings:
         except (UnicodeError, ValueError):
             return False
         if station == "MMF":
-            if not isinstance(value, dict) or set(value) - set(STATIONS):
+            if not isinstance(value, dict) or set(value) - set(self.stations):
                 return False
         record = {"topic": topic, "receivedAt": utc(received_at if received_at is not None else time.time()),
                   "retained": bool(retained), "rawPayload": raw, "value": value}
@@ -116,7 +129,7 @@ class Readings:
             connected = self.connected
         stations = []
         aggregate = messages.get(self.root + "/MMF")
-        for station in STATIONS:
+        for station in self.stations:
             prefix = self.root + "/" + station
             records = [v for k, v in sorted(messages.items()) if k == prefix or k.startswith(prefix + "/")]
             if aggregate and station in aggregate["value"]:
@@ -162,6 +175,19 @@ def deliver(config, snapshot, stop):
     return False
 
 
+def deliver_averages(summary, stop):
+    for delay in (0, 5, 20):
+        if stop.wait(delay):
+            return False
+        try:
+            write_averages(summary)
+            LOG.info("event=supabase_capture_saved parameterCount=%s", len(summary["parameters"]))
+            return True
+        except Exception:
+            LOG.warning("event=supabase_write_attempt_failed requestId=%s", uuid.uuid4().hex)
+    return False
+
+
 def collect_once(config, readings, stop, seconds, no_upload=False):
     LOG.info("event=collection_window seconds=%s", seconds)
     if stop.wait(seconds):
@@ -170,12 +196,18 @@ def collect_once(config, readings, stop, seconds, no_upload=False):
     present = sum(bool(s["messages"]) for s in snapshot["stations"])
     retained = sum(any(m["retained"] for m in s["messages"]) for s in snapshot["stations"])
     LOG.info("event=collection_complete stationsWithData=%s stationsWithRetainedData=%s brokerConnected=%s", present, retained, snapshot["brokerConnected"])
-    if not snapshot["brokerConnected"] or present != len(STATIONS):
+    if not snapshot["brokerConnected"] or present != len(snapshot["stations"]):
         LOG.error("event=incomplete_collection upload=skipped")
         return 2
     if no_upload:
         LOG.info("event=probe_complete upload=disabled")
         return 0
+    summary = average_snapshot(snapshot)
+    snapshot["derivedSummary"] = summary
+    LOG.info("event=averages_calculated parameterCount=%s excludedValues=%s unverifiedMessages=%s unitConflictCount=%s", len(summary["parameters"]), summary["excludedValues"], summary["unverifiedMessages"], len(summary["unitConflicts"]))
+    if config.get("supabaseEnabled") and not deliver_averages(summary, stop):
+        LOG.error("event=supabase_write_failed")
+        return 4
     request_id = uuid.uuid4().hex
     if not deliver(config, snapshot, stop):
         LOG.error("event=snapshot_upload_failed requestId=%s", request_id)
@@ -187,7 +219,7 @@ def collect_once(config, readings, stop, seconds, no_upload=False):
 def run(config, once=False, seconds=180, no_upload=False):
     import paho.mqtt.client as mqtt
 
-    readings = Readings(config["topicRoot"], config["siteCode"])
+    readings = Readings(config["topicRoot"], config["siteCode"], config.get("stations", STATIONS))
     LOG.info("event=collector_started intervalSeconds=%s", INTERVAL)
     stop = threading.Event()
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="mmf-" + uuid.uuid4().hex)
@@ -201,13 +233,13 @@ def run(config, once=False, seconds=180, no_upload=False):
         if reason_code == 0:
             LOG.info("event=broker_connected")
             subscriptions = [(config["topicRoot"] + "/MMF", 1)]
-            subscriptions.extend((config["topicRoot"] + "/" + station + "/#", 1) for station in STATIONS)
+            subscriptions.extend((config["topicRoot"] + "/" + station + "/#", 1) for station in readings.stations)
             client.subscribe(subscriptions)
         else:
             LOG.warning("event=broker_connection_rejected")
 
     def on_subscribe(client, userdata, mid, reason_codes, properties):
-        accepted = len(reason_codes) == 5 and all(not code.is_failure for code in reason_codes)
+        accepted = len(reason_codes) == 1 + len(readings.stations) and all(not code.is_failure for code in reason_codes)
         readings.set_connected(accepted)
         LOG.info("event=subscription status=%s", "ready" if accepted else "rejected")
 
@@ -244,6 +276,12 @@ def run(config, once=False, seconds=180, no_upload=False):
             request_id = uuid.uuid4().hex
             try:
                 snapshot = readings.snapshot(now)
+                summary = average_snapshot(snapshot)
+                snapshot["derivedSummary"] = summary
+                if config.get("supabaseEnabled") and not deliver_averages(summary, stop):
+                    LOG.error("event=supabase_write_failed requestId=%s", request_id)
+                    due = next_boundary(time.time())
+                    continue
                 if deliver(config, snapshot, stop):
                     LOG.info("event=snapshot_uploaded requestId=%s stationsWithData=%s", request_id,
                              sum(bool(station["messages"]) for station in snapshot["stations"]))

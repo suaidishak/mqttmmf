@@ -1,5 +1,9 @@
 # GitHub Actions setup and cutover
 
+For the optional cross-station averaging and Supabase sink, follow
+`SUPABASE_SETUP.md`. The snapshot retains raw messages and adds an explicitly
+labelled derived summary. Supabase writes require separate configuration.
+
 The workflow collects MMF1–MMF4 for 180 seconds, uploads one JSON snapshot,
 then exits. It never writes live payloads to Git, runner files, caches or
 artifacts. Logs contain activity and station counts only. Missing stations or
@@ -61,7 +65,9 @@ MQTT coverage is required.
 
 Only `.github/workflows/mqtt-mmf.yml`, `pythonanywhere-mmf/collector.py`,
 `pythonanywhere-mmf/requirements.txt`, `pythonanywhere-mmf/test_collector.py`,
-and this setup guide are needed. Do not publish the wider private-data
+`pythonanywhere-mmf/averages.py`, `pythonanywhere-mmf/supabase_writer.py`,
+`pythonanywhere-mmf/test_averages.py`, `SUPABASE_SETUP.md`, the new Supabase
+migration and this setup guide are needed. Do not publish the wider private-data
 prototype, Windows credential files, generated data, or runtime configuration.
 
 References: [GitHub scheduling](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule),

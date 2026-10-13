@@ -6,7 +6,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from collector import Readings, collect_once, deliver, environment_config, load_config, next_boundary, upload_snapshot
+from collector import MAX_TOPICS, Readings, collect_once, deliver, environment_config, load_config, next_boundary, upload_snapshot
 
 
 class CollectorTests(unittest.TestCase):
@@ -48,7 +48,7 @@ class CollectorTests(unittest.TestCase):
         for payload in (b"NaN", b"not json", b"\xff", b"1" * 65537):
             self.assertFalse(readings.accept("BDNS/MMF1", payload))
         self.assertFalse(readings.accept("BDNS/MMF", b'{"PPC":1}'))
-        for number in range(256):
+        for number in range(MAX_TOPICS):
             self.assertTrue(readings.accept(f"BDNS/MMF1/{number}", b"1"))
         self.assertFalse(readings.accept("BDNS/MMF1/overflow", b"1"))
         self.assertTrue(readings.accept("BDNS/MMF1/0", b"2"))

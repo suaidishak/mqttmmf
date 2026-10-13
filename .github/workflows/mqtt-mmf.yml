@@ -48,6 +48,10 @@ jobs:
           MQTT_TLS: ${{ vars.MQTT_TLS || 'false' }}
           MQTT_TOPIC_ROOT: ${{ vars.MQTT_TOPIC_ROOT || 'BDNS' }}
           MMF_SITE_CODE: ${{ vars.MMF_SITE_CODE || 'LSS-BIDOR' }}
+          MQTT_STATIONS: ${{ vars.MQTT_STATIONS || 'MMF1,MMF2,MMF3,MMF4' }}
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          MMF_SUPABASE_ENABLED: ${{ vars.MMF_SUPABASE_ENABLED || 'false' }}
           PYTHONANYWHERE_REMOTE_FILE: ${{ vars.PYTHONANYWHERE_REMOTE_FILE }}
           PROBE_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.probe_only }}
         shell: bash
