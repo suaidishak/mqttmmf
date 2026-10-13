@@ -61,3 +61,13 @@ jobs:
             args+=(--no-upload)
           fi
           python pythonanywhere-mmf/collector.py "${args[@]}"
+
+  dashboard:
+    needs: collect
+    if: vars.MMF_DASHBOARD_PUBLIC_ENABLED == 'true' && (github.event_name != 'workflow_dispatch' || !inputs.probe_only)
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/publish-mmf-dashboard.yml
+    secrets: inherit
