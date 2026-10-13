@@ -42,13 +42,21 @@ class AverageTests(unittest.TestCase):
         self.assertEqual(summary["parameters"][0]["contributingStations"], 1)
         self.assertEqual(summary["unverifiedMessages"], 2)
 
-    def test_units_are_not_silently_mixed(self):
+    def test_labels_are_metadata_and_conflicts_do_not_exclude_numbers(self):
         readings = Readings("TEST", "SYNTHETIC")
         readings.accept("TEST/MMF1/mw", b'{"value":1,"unit":"MW"}', received_at=900)
         readings.accept("TEST/MMF2/mw", b'{"value":1000,"unit":"kW"}', received_at=900)
         summary = average_snapshot(readings.snapshot(901))
-        self.assertEqual(summary["parameters"], [])
+        self.assertEqual(summary["parameters"][0]["averageValue"], 500.5)
+        self.assertEqual(summary["parameters"][0]["contributingStations"], 2)
+        self.assertEqual(summary["parameters"][0]["sourceUnits"], ["MW", "kW"])
+        self.assertTrue(summary["parameters"][0]["unitConflict"])
+        self.assertIsNone(summary["parameters"][0]["unit"])
         self.assertEqual(summary["unitConflicts"], ["mw"])
+        readings.accept("TEST/MMF3/mw", b'{"value":2,"unit":42}', received_at=900)
+        summary = average_snapshot(readings.snapshot(901))
+        self.assertEqual(summary["parameters"][0]["contributingStations"], 3)
+        self.assertEqual(summary["parameters"][0]["stationsWithUnit"], 2)
 
     def test_configurable_station_count_and_new_parameters(self):
         readings = Readings("TEST", "SYNTHETIC", stations=("MMF1", "MMF9"))

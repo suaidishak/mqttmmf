@@ -23,9 +23,12 @@ or credentials into Git or the Sites D1 database.
 - Boolean, null, text, non-finite numeric values and metadata are excluded.
   Retained readings and messages older than 15 minutes are excluded from means
   because their measurement age is unverified.
-- Conflicting reported units exclude that parameter. A missing unit does not
-  become an assumed unit: `stationsWithUnit` records how many contributors had
-  an explicit unit. Review unit completeness before engineering interpretation.
+- Per the owner's test-data instruction, unit labels do not exclude numeric
+  readings or trigger conversions. `sourceUnits` preserves all distinct reported
+  labels, `unitConflict` flags differing labels, and `unit` is populated only
+  when there is one agreed label. `stationsWithUnit` records metadata coverage.
+  Malformed unit metadata is ignored without dropping the numeric reading.
+  These are numeric means, not physically verified or converted quantities.
 - All parameters use an arithmetic mean as requested, including directional
   values. This is not a circular wind-direction mean or an approved weather
   quality-control model. Such rules require a subsequent explicit change.
@@ -44,8 +47,10 @@ The new CLI-generated migration is under `supabase/migrations/`:
 - `mmf_captures`: composite primary key `(site_code, captured_at)`, station
   count, aggregation method, timestamp basis and insertion time.
 - `mmf_parameter_averages`: one typed numeric row per parameter, key
-  `(site_code, captured_at, parameter_code)`, mean, denominator, unit and unit
-  coverage. A composite foreign key links each value to its capture.
+  `(site_code, captured_at, parameter_code)`, mean, denominator, source unit
+  labels, conflict flag and unit coverage. A composite foreign key links each
+  value to its capture. A second numbered migration adds unit metadata while
+  preserving existing captures and keeping the first applied migration intact.
 
 New parameters add rows rather than columns, so schema migrations are not
 needed for every weather-station variation. The capture primary key supports

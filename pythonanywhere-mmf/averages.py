@@ -23,7 +23,7 @@ def measurement(value):
         unit = value.get("unit")
         value = value.get("value")
     if unit is not None and (not isinstance(unit, str) or len(unit) > 64):
-        return None, None
+        unit = None
     return numeric(value), unit
 
 
@@ -72,7 +72,6 @@ def average_snapshot(snapshot):
         units = {unit for _, unit in samples if unit is not None}
         if len(units) > 1:
             conflicts.append(parameter)
-            continue
         # Divide before summing so equal very large finite readings don't overflow.
         count = len(samples)
         mean = math.fsum(number / count for number, _ in samples)
@@ -80,7 +79,8 @@ def average_snapshot(snapshot):
             excluded += count
             continue
         parameters.append({"parameterCode": parameter, "averageValue": mean,
-                           "contributingStations": count, "unit": next(iter(units), None),
+                           "contributingStations": count, "unit": next(iter(units)) if len(units) == 1 else None,
+                           "sourceUnits": sorted(units), "unitConflict": len(units) > 1,
                            "stationsWithUnit": sum(unit is not None for _, unit in samples)})
     return {"siteCode": snapshot["siteCode"], "capturedAt": snapshot["snapshotAt"],
             "stationCount": len(snapshot["stations"]), "aggregationMethod": "cross_station_arithmetic_mean",
